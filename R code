@@ -1,0 +1,226 @@
+##
+##Shivani Kamath Belman
+learn and use Bioconductor package on a data set of 10 microarray data generated from affymetrix human genome U133A GeneChip.
+
+
+```{r}
+
+library(Biobase)
+library(affy)
+library(limma)
+library(annotate)
+library("hgu133a.db")
+
+####Raw data file in the text document is read into the dataframe
+##Reading data into variable
+data <- read.AnnotatedDataFrame("TAM-status-hgu133a.txt", header=TRUE, as.is=TRUE)
+r <- pData(data)
+r <- cbind(rownames(r),r)
+rownames(r)<- NULL
+colnames(r)<- c("filenames","tam")
+r$filenames <- paste(r$filenames, ".CEL.gz", sep="")
+c <- list.celfiles()
+
+tab <- read.delim("TAM-status-hgu133a.txt", check.names=FALSE, as.is=TRUE)
+rownames(tab) <- r$filenames ##adding file names as attributes
+####Reading the file into variable ad through ReadAffy function
+##reading in affy matrix 
+ad <- ReadAffy(phenoData = tab) 
+
+###Boxplot with non normalised and before preproceesing steps.
+data <- exprs(ad)
+
+nam = c("GSM151013","GSM151014","GSM151016","GSM151019","GSM151025","GSM150949","GSM150950","GSM150951","GSM150953","GSM150954")
+par(mar=c(3,3,3,1)+0.1)
+boxplot(ad, las=1,col="blue",main=" Boxplot Before Normalization",names=nam, cex.axis=0.5)
+mtext("sampleID",side=1,line=2)
+mtext("genes",side=2,line =2.3)
+```
+```{r}
+hist(ad, main="Histogram Before Normalization",col="blue")
+```
+
+```{r}
+##pre processing and normalisation
+set <- rma(ad)
+###boxplot and histogram with normalised and pre processed data. 
+x <- exprs(set)
+```
+
+```{r}
+par(mar=c(3,3,3,1)+0.1)
+boxplot(x, las=1,col="blue",main="Boxplot After Normalization",names=nam, cex.axis=0.5)
+mtext("sampleID",side=1,line=2)
+mtext("genes",side=2,line =1.7)
+```
+```{r}
+hist(normalize(ad), main="Histogram After Normalization",col="blue")
+```
+
+
+###Preprocessing of data
+The data is preprocessed which includes background correction,  normalization and calculation of expression for all of the gene data.
+This is done using the rma() function from the affy package
+through the boxplot and the histogram curves we can easily notice the change in the processed data. The boxplots show that the data is normalised after the use of rma function with removal of major outliers
+
+
+###Gene annotation:
+The gene symbols are added in a symbol column, this is done using the hgu133a database.
+```{r}
+##write data into excel sheet for reference
+write.table(data.frame(x,check.names=FALSE),file="filename.csv",sep=
+                ",",col.names=NA,quote=FALSE)
+Id <- featureNames(set)
+symbol <- getSYMBOL(Id, "hgu133a.db")
+fData(set) <- data.frame(symbol=symbol)
+```
+
+###construction of design matrix
+The design matrix is constructed using the tam values provided in the text document.
+```{r}
+##designing the design matrix with tam treatments
+treatments<- factor(c(r$tam),levels=c("0","1"))
+treatments
+design <- model.matrix(~treatments)
+fit <- lmFit(set,design)
+##eBayes fit on the lmFit data
+fit1 <- eBayes(fit, trend="TRUE", robust = "TRUE" )
+##decide test to give us the differentially expressed gene data
+res <- decideTests(fit1, adjust.method = "BH")
+summary(res)
+vennDiagram(res[,2])
+```
+
+The Venn diagram shows the 3264 gene sets that are a collection of different sets represting the differentially expressed genes in the sample space that is the entire gene expression set.
+
+###Differential Expression
+There are 3264 differentially expressed genes, out of which 1383 are up-regulated genes and 1881 are down-regulated
+
+The top 20 Differentially expressed genes along with their log fold chages and their adjusted p values are:
+```{r}
+library(hgu133a.db)
+fit1$genes$EntrezID <-mapIds(hgu133a.db, keys= as.character(fit1$genes$symbol),column="ENTREZID", keytype ="SYMBOL")
+top <- topTable(fit1, coef ="treatments1", n= Inf)## for all genes
+topde <- topTable(fit1, coef="treatments1", n=3264)## for the dE genes
+top20 <- topTable(fit1, coef = "treatments1", n=20)## top 20 DE genes
+```
+
+```{r}
+disp <- top20[, c("symbol","logFC","adj.P.Val")]
+disp
+```
+
+The mean difference plot gives an vizualization of the upregulated, downregulated and not so significant gene expression through the treatment coeffecients. 
+
+
+```{r}
+plotMD(fit1,coef = "treatments1", status=res[,2], values=c(1,-1), col=c("red","blue"))
+```
+
+
+####HW3 
+
+Adding of the EntrezId column into fitted variable by mapping the symbols to Entrez database.
+```{r}
+volcanoplot(fit1, coef=2, highlight =20, names =fit1$genes$symbol ,  main="Volcano plot for DE genes (top 20)")
+```
+
+
+###Volcano plot
+Using the volcano plot we can assess the change in our data set where the differentially expressed genes can be viewed as a scatter across the plot.In the plot above, the main 20 differentially expressed genes are labelled.
+
+###HeatMap:
+```{r}
+library(gplots)
+ids <- rownames(topde)
+par(mar = c(8,8,8,8))
+heatmap.2(exprs(set)[ids, ],trace='none', scale ='row', margins=c(5,5),cexCol=0.5, srtCol=45, main ="Heatmap")
+```
+
+
+
+###GO Term Enrichment Analyses using goana() from Bioconductor.
+The Function goana() uses the hypothesis testing in which it computes one-sided hypergeometric tests which is equivalent to Firsher's exact test.
+Here, the genes in the list are tested to check if they over represent a particular GO term. 
+The hypothesis of the association between the genes in the list and the particular GO term is test.
+The probability that the genes are annotated with that particular GO term is given by a hypergeometric distribution.
+```{r}
+g <- goana(fit1,geneid="EntrezID")
+topGO(g,n=20,truncate="50")
+```
+
+###GSA using gage().
+Kegg pathways is used in the function.
+```{r}
+library(gage)
+library(gageData)
+library(dplyr)
+library(DESeq2)
+###GAGE
+data(kegg.sets.hs)
+data(sigmet.idx.hs)
+kegg.sets.hs = kegg.sets.hs[sigmet.idx.hs]
+
+inp <- topde$logFC
+names(inp) = topde$EntrezID
+gageres <- gage(inp, gsets=kegg.sets.hs, same.dir=TRUE)
+lapply(gageres,head)
+```
+
+```{r}
+keggpathways <- data.frame(id = rownames(gageres$greater), gageres$greater) %>%
+  tbl_df()%>%
+  filter(row_number() <=5) %>%
+  .$id %>%
+  as.character()
+keggpathways
+```
+The top 5 upregulated genes pathways.
+```{r}
+keggresids <- substr(keggpathways, start=1, stop=8)
+keggresids
+
+```
+
+```{r}
+library(pathview)
+
+plot_path <- function(pid) pathview(gene.data=inp,pathway.id= pid, new,signature=FALSE)
+tmp = sapply(keggresids, function(pid) pathview(gene.data= inp, pathway.id=pid))
+```
+pathway images produced from gage.
+```{r echo=FALSE, out.width='100%'}
+knitr::include_graphics('./hsa00830.pathview.png')
+```
+
+```{r echo=FALSE, out.width='100%'}
+knitr::include_graphics('./hsa04140.pathview.png')
+```
+
+```{r echo=FALSE, out.width='100%'}
+knitr::include_graphics('./hsa04650.pathview.png')
+```
+
+```{r echo=FALSE, out.width='100%'}
+knitr::include_graphics('./hsa04740.pathview.png')
+```
+
+```{r echo=FALSE, out.width='100%'}
+knitr::include_graphics('./hsa04976.pathview.png')
+```
+
+
+###What is GO term enrichment analysis? 
+**Gene Ontology term enrichment analysis** is an over representation analysis where we can characterise the composition of the gene sets. 
+*There are hypergeometric, fisher-exact and jaccard tests that are used for the purpose of identifying over representation.
+*In hypergeometric test the differential expression is considered by getting a score that is a product of significant p value and the fold change. This is used in the goana() function used in my scripts.
+*The Fisher exact test takes two categorical variables into accpunt and tests if relationship between the two is significant. 
+
+***
+###What is GSA? 
+**Gene set analysis (GSA)** is analysis of gene expression data based on pathway knowledge.  
+*The GSA is different from the GO term enrichment analysis as it focuses on sets of related genes rather than considering individual gene analyses. Generally applicable Gene-set Enrichment(GAGE) is a method used for GSA. *GAGE applies to any number of samples and is based on a parametric gene randomization procedure,according to a paper "GAGE: generally applicable gene set enrichment for pathway analysis.
+***
+*The commonality between the two would be that both these methods address the same question which is: What are the enriched pathways? 
+*The ways that the methods do this task is different. FOr GO term enrichment analysis, we provide a list of genes that are analysed for any significant enrichment of GO Terms using tests like hypogeometric distribution test, chi sq test, etc using arbitary threshold values.
+*In Gene Set Analysis doest not require any cutoffs takes all the genes as the input. They can be ranked according to a statistic like fold change values or log(p) values.
